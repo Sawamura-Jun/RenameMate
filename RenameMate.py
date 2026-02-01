@@ -290,11 +290,36 @@ class RenameMateFrame(wx.Frame):
         # 必要なときだけメッセージ表示
         wx.MessageBox(message, "RenameMate", wx.OK | icon)
 
+    def position_near_cursor(self):
+        # カーソル付近に表示し、画面外にはみ出さないよう補正
+        mouse_pos = wx.GetMousePosition()
+        display_index = wx.Display.GetFromPoint(mouse_pos)
+        if display_index == wx.NOT_FOUND:
+            display = wx.Display(0)
+        else:
+            display = wx.Display(display_index)
+
+        bounds = display.GetGeometry()
+        size = self.GetSize()
+
+        # 少しオフセットしてカーソルと被らないようにする
+        x = mouse_pos.x + 10
+        y = mouse_pos.y + 10
+
+        max_x = bounds.x + bounds.width - size.x
+        max_y = bounds.y + bounds.height - size.y
+
+        x = min(max(x, bounds.x), max_x)
+        y = min(max(y, bounds.y), max_y)
+
+        self.SetPosition(wx.Point(x, y))
+
 
 class RenameMateApp(wx.App):
     def OnInit(self):
         # アプリ起動時にフレームを生成
         frame = RenameMateFrame()
+        frame.position_near_cursor()
         frame.Show()
         frame.Refresh()
         # コマンドライン引数で渡されたパスを読み込む（右クリック連携用）
