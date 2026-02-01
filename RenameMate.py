@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ウィンドウサイズとテキストの基準フォントサイズ
-WINDOW_SIZE = (750, 260)
+WINDOW_SIZE = (880, 260)
 TEXT_FONT_SIZE = 24
 
 import datetime
@@ -74,11 +74,12 @@ class RenameMateFrame(wx.Frame):
 
         # 操作ボタン
         self.rename_button = wx.Button(panel, label="変更")
+        self.clear_button = wx.Button(panel, label="クリア")
         self.prefix_date_button = wx.Button(panel, label="先頭に日付")
         self.suffix_date_button = wx.Button(panel, label="末尾に日付")
         self.space_button = wx.Button(panel, label="空白を_に")
 
-        for btn in (self.rename_button, self.prefix_date_button,
+        for btn in (self.rename_button, self.clear_button, self.prefix_date_button,
                     self.suffix_date_button, self.space_button):
             btn.SetFont(button_font)
             btn.SetMinSize(button_size)
@@ -89,6 +90,7 @@ class RenameMateFrame(wx.Frame):
 
         # イベントバインド
         self.rename_button.Bind(wx.EVT_BUTTON, self.on_rename)
+        self.clear_button.Bind(wx.EVT_BUTTON, self.on_clear)
         self.prefix_date_button.Bind(wx.EVT_BUTTON, self.on_prefix_date)
         self.suffix_date_button.Bind(wx.EVT_BUTTON, self.on_suffix_date)
         self.space_button.Bind(wx.EVT_BUTTON, self.on_replace_spaces)
@@ -105,11 +107,12 @@ class RenameMateFrame(wx.Frame):
 
         button_sizer = wx.BoxSizer(wx.HORIZONTAL)
         button_sizer.Add(self.rename_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        button_sizer.Add(self.clear_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         button_sizer.Add(self.prefix_date_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         button_sizer.Add(self.suffix_date_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         button_sizer.Add(self.space_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         button_sizer.AddStretchSpacer()
-        button_sizer.Add(self.always_on_top, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.ALIGN_CENTER_VERTICAL, 10)
+        button_sizer.Add(self.always_on_top, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.ALIGN_CENTER_VERTICAL, 5)
 
         main_sizer.Add(button_sizer, 0, wx.EXPAND)
 
@@ -227,6 +230,13 @@ class RenameMateFrame(wx.Frame):
         value = value.replace(" ", "_")
         value = value.replace(FULLWIDTH_SPACE, FULLWIDTH_UNDERSCORE)
         self.base_text.ChangeValue(value)
+
+    def on_clear(self, event):
+        # 入力欄と対象パスをリセット
+        self.current_path = None
+        self.base_text.ChangeValue("")
+        self.ext_text.ChangeValue("")
+        self.base_text.SetFocus()
 
     def on_rename(self, event):
         # 実際のリネーム処理
