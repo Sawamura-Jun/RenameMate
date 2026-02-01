@@ -5,6 +5,7 @@ TEXT_FONT_SIZE = 24
 
 import datetime
 import os
+import sys
 
 import wx
 
@@ -296,7 +297,17 @@ class RenameMateApp(wx.App):
         frame = RenameMateFrame()
         frame.Show()
         frame.Refresh()
+        # コマンドライン引数で渡されたパスを読み込む（右クリック連携用）
+        start_path = self._get_start_path()
+        if start_path:
+            frame.load_path(start_path)
         return True
+
+    def _get_start_path(self):
+        # 右クリックの旧コンテキストメニューから渡される "%1" を想定
+        if len(sys.argv) < 2:
+            return None
+        return sys.argv[1]
 
 
 if __name__ == "__main__":
