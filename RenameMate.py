@@ -67,6 +67,8 @@ class RenameMateFrame(wx.Frame):
         panel.Bind(wx.EVT_MOUSEWHEEL, self.on_mouse_wheel)
         # Ctrl+0 で文字サイズをデフォルトに戻す
         self.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
+        # 最小化/復元時の位置調整
+        self.Bind(wx.EVT_ICONIZE, self.on_iconize)
 
         # ボタン設定
         button_font = wx.Font(17, wx.FONTFAMILY_DEFAULT,
@@ -149,6 +151,12 @@ class RenameMateFrame(wx.Frame):
             self.text_font_size = TEXT_FONT_SIZE
             self._apply_text_font()
             return
+        event.Skip()
+
+    def on_iconize(self, event):
+        # 最小化解除時にカーソル付近へ移動
+        if not event.IsIconized():
+            self.position_near_cursor()
         event.Skip()
 
     def on_char_filter(self, event):
