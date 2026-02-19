@@ -260,6 +260,10 @@ class RenameMateFrame(wx.Frame):
 
     def on_rename_clear_minimize(self, event):
         # 変更→クリア→最小化を一括で実行
+        if not self.current_path:
+            self.Iconize(True)
+            return
+
         if not self._rename_current():
             return
         self.on_clear(None)
