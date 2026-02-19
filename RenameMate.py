@@ -73,14 +73,19 @@ class RenameMateFrame(wx.Frame):
         # ボタン設定
         button_font = wx.Font(17, wx.FONTFAMILY_DEFAULT,
                               wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
-        button_size = (130, 45)     # ボタンのサイズ
+        button_size = (80, 45)     # 標準ボタンのサイズ
+        combo_button_size = (220, 45)  # 追加ボタンのみ横幅を広くする
 
         # 操作ボタン
+        self.rename_clear_minimize_button = wx.Button(panel, label="変更&&クリア&&最小化")
         self.rename_button = wx.Button(panel, label="変更")
         self.clear_button = wx.Button(panel, label="クリア")
-        self.prefix_date_button = wx.Button(panel, label="先頭に日付")
-        self.suffix_date_button = wx.Button(panel, label="末尾に日付")
-        self.space_button = wx.Button(panel, label="空白を_に")
+        self.prefix_date_button = wx.Button(panel, label="日付_")
+        self.suffix_date_button = wx.Button(panel, label="_日付")
+        self.space_button = wx.Button(panel, label="\" \">_")
+
+        self.rename_clear_minimize_button.SetFont(button_font)
+        self.rename_clear_minimize_button.SetMinSize(combo_button_size)
 
         for btn in (self.rename_button, self.clear_button, self.prefix_date_button,
                     self.suffix_date_button, self.space_button):
@@ -92,6 +97,7 @@ class RenameMateFrame(wx.Frame):
         self.always_on_top.SetValue(True)
 
         # イベントバインド
+        self.rename_clear_minimize_button.Bind(wx.EVT_BUTTON, self.on_rename_clear_minimize)
         self.rename_button.Bind(wx.EVT_BUTTON, self.on_rename)
         self.clear_button.Bind(wx.EVT_BUTTON, self.on_clear)
         self.prefix_date_button.Bind(wx.EVT_BUTTON, self.on_prefix_date)
@@ -109,6 +115,7 @@ class RenameMateFrame(wx.Frame):
         main_sizer.AddSpacer(10)
 
         button_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        button_sizer.Add(self.rename_clear_minimize_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         button_sizer.Add(self.rename_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         button_sizer.Add(self.clear_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         button_sizer.Add(self.prefix_date_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
@@ -249,16 +256,27 @@ class RenameMateFrame(wx.Frame):
 
     def on_rename(self, event):
         # 実際のリネーム処理
+        self._rename_current()
+
+    def on_rename_clear_minimize(self, event):
+        # 変更→クリア→最小化を一括で実行
+        if not self._rename_current():
+            return
+        self.on_clear(None)
+        self.Iconize(True)
+
+    def _rename_current(self):
+        # 現在の入力内容でリネームを実行
         if not self.current_path:
             self._show_message("オブジェクトをドラッグ＆ドロップしてください。", wx.ICON_INFORMATION)
-            return
+            return False
 
         base = self._sanitize_text(self.base_text.GetValue()).strip()
         ext = self._sanitize_text(self.ext_text.GetValue()).strip()
 
         if not base:
             self._show_message("ベース名が空です。", wx.ICON_ERROR)
-            return
+            return False
 
         if ext:
             if not ext.startswith("."):
@@ -269,20 +287,21 @@ class RenameMateFrame(wx.Frame):
         new_path = os.path.join(src_dir, new_name)
 
         if os.path.normcase(new_path) == os.path.normcase(self.current_path):
-            return
+            return True
 
         if os.path.exists(new_path):
             self._show_message("同じ名前のオブジェクトが既に存在します。", wx.ICON_ERROR)
-            return
+            return False
 
         try:
             os.rename(self.current_path, new_path)
         except OSError as exc:
             self._show_message(f"変更に失敗しました: {exc}", wx.ICON_ERROR)
-            return
+            return False
 
         self.current_path = new_path
         # 成功時はポップアップを出さずに状態のみ更新
+        return True
 
     def on_toggle_topmost(self, event):
         # 常に手前表示の切り替え
