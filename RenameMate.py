@@ -1,208 +1,233 @@
 # -*- coding: utf-8 -*-
 # ウィンドウサイズとテキストの基準フォントサイズ
-WINDOW_SIZE = (880, 260)
-TEXT_FONT_SIZE = 24
+WINDOW_SIZE = (870, 236)
+TEXT_FONT_SIZE = 20
+BUTTON_FONT_SIZE = 17
 
 import datetime
 import os
 import sys
 
-import wx
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QCursor, QFont, QGuiApplication
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QHBoxLayout,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 # Windowsのファイル名で禁止されている文字セット
 INVALID_CHARS = set('\\/:*?"<>|')
 # 全角空白と全角アンダースコア
 FULLWIDTH_SPACE = "\u3000"
 FULLWIDTH_UNDERSCORE = "\uff3f"
+TEXT_VISIBLE_LINES = 4
 
 
-class RenameMateDropTarget(wx.FileDropTarget):
-    # DnD受け取り用のドロップターゲット
-    def __init__(self, on_drop_callback):
-        super().__init__()
-        self.on_drop_callback = on_drop_callback
+class PathTextEdit(QPlainTextEdit):
+    # DnD受け取り用の入力欄
+    def __init__(self, on_drop_callback, on_enter_callback=None, parent=None):
+        super().__init__(parent)
+        self._on_drop_callback = on_drop_callback
+        self._on_enter_callback = on_enter_callback
+        self.setAcceptDrops(True)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
 
-    def OnDropFiles(self, x, y, filenames):
+    def keyPressEvent(self, event):
+        # 禁止文字の直接入力をブロック
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self._on_enter_callback:
+                self._on_enter_callback()
+            event.accept()
+            return
+
+        if event.key() == Qt.Key.Key_Tab:
+            event.ignore()
+            return
+
+        text = event.text()
+        if text and any(ch in INVALID_CHARS or ch in ("\r", "\n", "\t") for ch in text):
+            event.ignore()
+            return
+        super().keyPressEvent(event)
+
+    def dragEnterEvent(self, event):
+        # ローカルパスのDnDのみ受け付ける
+        if self._extract_path(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event):
         # ドロップされた先頭1件のみを扱う
-        if not filenames:
-            return False
-        self.on_drop_callback(filenames[0])
-        return True
+        path = self._extract_path(event.mimeData())
+        if not path:
+            event.ignore()
+            return
+        self._on_drop_callback(path)
+        event.acceptProposedAction()
+
+    @staticmethod
+    def _extract_path(mime_data):
+        if mime_data.hasUrls():
+            for url in mime_data.urls():
+                if url.isLocalFile():
+                    return url.toLocalFile()
+        if mime_data.hasText():
+            text = mime_data.text().strip().strip('"')
+            if text:
+                return text.splitlines()[0]
+        return None
 
 
-class RenameMateFrame(wx.Frame):
+class RenameMateWindow(QWidget):
     # メインウィンドウ
     def __init__(self):
-        # 常に手前表示の初期スタイル
-        style = wx.DEFAULT_FRAME_STYLE | wx.STAY_ON_TOP
-        super().__init__(None, title="RenameMate", size=WINDOW_SIZE, style=style)
+        super().__init__()
+        self.setWindowTitle("RenameMate")
+        self.setFixedSize(*WINDOW_SIZE)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
 
         # 現在選択中のパスと状態
         self.current_path = None
-        self.text_font_size = TEXT_FONT_SIZE
         self._in_text_change = False
 
-        # ルートパネル
-        panel = wx.Panel(self)
-        panel.SetBackgroundColour(wx.Colour(150, 150, 150))
-
         # ベース名と拡張子の入力欄
-        self.base_text = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_PROCESS_ENTER)
-        self.ext_text = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_PROCESS_ENTER)
+        self.base_text = PathTextEdit(self.load_path, self.on_rename_clear_minimize, self)
+        self.ext_text = PathTextEdit(self.load_path, self.on_rename_clear_minimize, self)
+        self.base_text.textChanged.connect(self.on_text_sanitize)
+        self.ext_text.textChanged.connect(self.on_text_sanitize)
         self._apply_text_font()
 
-        # DnDの受付
-        self.base_text.SetDropTarget(RenameMateDropTarget(self.load_path))
-        self.ext_text.SetDropTarget(RenameMateDropTarget(self.load_path))
-
-        # 禁止文字のフィルタとサニタイズ
-        self.base_text.Bind(wx.EVT_CHAR, self.on_char_filter)
-        self.ext_text.Bind(wx.EVT_CHAR, self.on_char_filter)
-        self.base_text.Bind(wx.EVT_TEXT, self.on_text_sanitize)
-        self.ext_text.Bind(wx.EVT_TEXT, self.on_text_sanitize)
-
-        # Ctrl + ホイールで文字サイズ変更
-        self.base_text.Bind(wx.EVT_MOUSEWHEEL, self.on_mouse_wheel)
-        self.ext_text.Bind(wx.EVT_MOUSEWHEEL, self.on_mouse_wheel)
-        panel.Bind(wx.EVT_MOUSEWHEEL, self.on_mouse_wheel)
-        # Ctrl+0 で文字サイズをデフォルトに戻す
-        self.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
-        # 最小化/復元時の位置調整
-        self.Bind(wx.EVT_ICONIZE, self.on_iconize)
-
         # ボタン設定
-        button_font = wx.Font(17, wx.FONTFAMILY_DEFAULT,
-                              wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
-        button_size = (80, 45)     # 標準ボタンのサイズ
-        combo_button_size = (220, 45)  # 追加ボタンのみ横幅を広くする
+        button_font = QFont()
+        button_font.setPointSize(BUTTON_FONT_SIZE)
+        button_size = (80, 45)          # 標準ボタンのサイズ
+        combo_button_size = (220, 45)   # 追加ボタンのみ横幅を広くする
 
         # 操作ボタン
-        self.rename_clear_minimize_button = wx.Button(panel, label="変更&&クリア&&最小化")
-        self.rename_button = wx.Button(panel, label="変更")
-        self.clear_button = wx.Button(panel, label="クリア")
-        self.prefix_date_button = wx.Button(panel, label="日付_")
-        self.suffix_date_button = wx.Button(panel, label="_日付")
-        self.space_button = wx.Button(panel, label="\" \">_")
+        self.rename_clear_minimize_button = QPushButton("変更&&クリア&&最小化", self)
+        self.rename_button = QPushButton("変更", self)
+        self.clear_button = QPushButton("クリア", self)
+        self.prefix_date_button = QPushButton("日付_", self)
+        self.suffix_date_button = QPushButton("_日付", self)
+        self.space_button = QPushButton("\" \">_", self)
 
-        self.rename_clear_minimize_button.SetFont(button_font)
-        self.rename_clear_minimize_button.SetMinSize(combo_button_size)
+        self.rename_clear_minimize_button.setFont(button_font)
+        self.rename_clear_minimize_button.setMinimumSize(*combo_button_size)
 
-        for btn in (self.rename_button, self.clear_button, self.prefix_date_button,
-                    self.suffix_date_button, self.space_button):
-            btn.SetFont(button_font)
-            btn.SetMinSize(button_size)
+        for btn in (
+            self.rename_button,
+            self.clear_button,
+            self.prefix_date_button,
+            self.suffix_date_button,
+            self.space_button,
+        ):
+            btn.setFont(button_font)
+            btn.setMinimumSize(*button_size)
 
         # 常に手前に表示するチェックボックス
-        self.always_on_top = wx.CheckBox(panel, label="常に手前に表示")
-        self.always_on_top.SetValue(True)
+        self.always_on_top = QCheckBox("常に手前に表示", self)
+        self.always_on_top.setChecked(True)
 
         # イベントバインド
-        self.rename_clear_minimize_button.Bind(wx.EVT_BUTTON, self.on_rename_clear_minimize)
-        self.rename_button.Bind(wx.EVT_BUTTON, self.on_rename)
-        self.clear_button.Bind(wx.EVT_BUTTON, self.on_clear)
-        self.prefix_date_button.Bind(wx.EVT_BUTTON, self.on_prefix_date)
-        self.suffix_date_button.Bind(wx.EVT_BUTTON, self.on_suffix_date)
-        self.space_button.Bind(wx.EVT_BUTTON, self.on_replace_spaces)
-        self.always_on_top.Bind(wx.EVT_CHECKBOX, self.on_toggle_topmost)
+        self.rename_clear_minimize_button.clicked.connect(self.on_rename_clear_minimize)
+        self.rename_button.clicked.connect(self.on_rename)
+        self.clear_button.clicked.connect(self.on_clear)
+        self.prefix_date_button.clicked.connect(self.on_prefix_date)
+        self.suffix_date_button.clicked.connect(self.on_suffix_date)
+        self.space_button.clicked.connect(self.on_replace_spaces)
+        self.always_on_top.stateChanged.connect(self.on_toggle_topmost)
 
         # レイアウト
-        main_sizer = wx.BoxSizer(wx.VERTICAL)
-        text_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        text_sizer.Add(self.base_text, 3, wx.LEFT | wx.TOP | wx.EXPAND, 10)
-        text_sizer.AddSpacer(10)
-        text_sizer.Add(self.ext_text, 1, wx.RIGHT | wx.TOP | wx.EXPAND, 10)
-        main_sizer.Add(text_sizer, 1, wx.EXPAND)
-        main_sizer.AddSpacer(10)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
 
-        button_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        button_sizer.Add(self.rename_clear_minimize_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-        button_sizer.Add(self.rename_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-        button_sizer.Add(self.clear_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-        button_sizer.Add(self.prefix_date_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-        button_sizer.Add(self.suffix_date_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-        button_sizer.Add(self.space_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-        button_sizer.AddStretchSpacer()
-        button_sizer.Add(self.always_on_top, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.ALIGN_CENTER_VERTICAL, 5)
+        text_layout = QHBoxLayout()
+        text_layout.setSpacing(10)
+        text_layout.addWidget(self.base_text, 3)
+        text_layout.addWidget(self.ext_text, 1)
+        main_layout.addLayout(text_layout, 1)
 
-        main_sizer.Add(button_sizer, 0, wx.EXPAND)
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
+        button_layout.addWidget(self.rename_clear_minimize_button)
+        button_layout.addWidget(self.rename_button)
+        button_layout.addWidget(self.clear_button)
+        button_layout.addWidget(self.prefix_date_button)
+        button_layout.addWidget(self.suffix_date_button)
+        button_layout.addWidget(self.space_button)
+        button_layout.addStretch(1)
+        button_layout.addWidget(self.always_on_top, 0, Qt.AlignmentFlag.AlignVCenter)
+        main_layout.addLayout(button_layout)
 
-        panel.SetSizer(main_sizer)
-        self.Centre()
+        self._center_window()
+
+    def _center_window(self):
+        # 初期位置は画面中央
+        screen = QGuiApplication.primaryScreen()
+        if not screen:
+            return
+        bounds = screen.availableGeometry()
+        x = bounds.x() + (bounds.width() - self.width()) // 2
+        y = bounds.y() + (bounds.height() - self.height()) // 2
+        self.move(x, y)
 
     def _apply_text_font(self):
         # テキストボックスへフォント反映
-        font = wx.Font(self.text_font_size, wx.FONTFAMILY_DEFAULT,
-                       wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
-        self.base_text.SetFont(font)
-        self.ext_text.SetFont(font)
-        self.base_text.Refresh()
-        self.ext_text.Refresh()
+        font = QFont(self.base_text.font())
+        font.setPointSize(TEXT_FONT_SIZE)
+        self.base_text.setFont(font)
+        self.ext_text.setFont(font)
+        self._apply_text_box_height()
+        self.base_text.update()
+        self.ext_text.update()
 
-    def on_mouse_wheel(self, event):
-        # Ctrl+ホイールで文字サイズを変更
-        if event.ControlDown():
-            rotation = event.GetWheelRotation()
-            if rotation > 0:
-                self.text_font_size += 1
-            elif rotation < 0:
-                self.text_font_size -= 1
-            self.text_font_size = max(6, min(self.text_font_size, 72))
-            self._apply_text_font()
-        else:
-            event.Skip()
+    def _apply_text_box_height(self):
+        # テキスト入力欄の高さを4行分に固定
+        for ctrl in (self.base_text, self.ext_text):
+            line_height = ctrl.fontMetrics().lineSpacing() * TEXT_VISIBLE_LINES
+            frame = ctrl.frameWidth() * 2
+            doc_margin = int(ctrl.document().documentMargin() * 2)
+            margins = ctrl.contentsMargins()
+            height = line_height + frame + doc_margin + margins.top() + margins.bottom()
+            ctrl.setFixedHeight(height)
 
-    def on_char_hook(self, event):
-        # Ctrl+0 で文字サイズを初期値に戻す
-        key_code = event.GetKeyCode()
-        if event.ControlDown() and key_code in (ord("0"), wx.WXK_NUMPAD0):
-            self.text_font_size = TEXT_FONT_SIZE
-            self._apply_text_font()
-            return
-        event.Skip()
-
-    def on_iconize(self, event):
+    def changeEvent(self, event):
         # 最小化解除時にカーソル付近へ移動
-        if not event.IsIconized():
-            self.position_near_cursor()
-        event.Skip()
+        if event.type() == QEvent.Type.WindowStateChange:
+            old_state = event.oldState()
+            was_minimized = bool(old_state & Qt.WindowState.WindowMinimized)
+            is_minimized = bool(self.windowState() & Qt.WindowState.WindowMinimized)
+            if was_minimized and not is_minimized:
+                self.position_near_cursor()
+        super().changeEvent(event)
 
-    def on_char_filter(self, event):
-        # 禁止文字の入力をブロック
-        key_code = event.GetUnicodeKey()
-        if key_code == wx.WXK_NONE:
-            key_code = event.GetKeyCode()
-
-        if key_code < 32:
-            event.Skip()
-            return
-
-        try:
-            char = chr(key_code)
-        except ValueError:
-            event.Skip()
-            return
-
-        if char in INVALID_CHARS or char in ("\r", "\n", "\t"):
-            return
-
-        event.Skip()
-
-    def on_text_sanitize(self, event):
+    def on_text_sanitize(self):
         # 貼り付け等で混入した禁止文字を除去
         if self._in_text_change:
             return
 
-        ctrl = event.GetEventObject()
-        value = ctrl.GetValue()
+        ctrl = self.sender()
+        value = ctrl.toPlainText()
         sanitized = self._sanitize_text(value)
         if sanitized != value:
             self._in_text_change = True
-            pos = ctrl.GetInsertionPoint()
-            ctrl.ChangeValue(sanitized)
-            ctrl.SetInsertionPoint(min(pos, len(sanitized)))
+            cursor = ctrl.textCursor()
+            pos = cursor.position()
+            ctrl.setPlainText(sanitized)
+            cursor = ctrl.textCursor()
+            cursor.setPosition(min(pos, len(sanitized)))
+            ctrl.setTextCursor(cursor)
             self._in_text_change = False
-
-        event.Skip()
 
     def _sanitize_text(self, text):
         # Windowsファイル名で禁止される文字を取り除く
@@ -218,7 +243,7 @@ class RenameMateFrame(wx.Frame):
     def load_path(self, path):
         # ドロップされたパスからベース名と拡張子を分解
         if not os.path.exists(path):
-            self._show_message("指定されたパスが見つかりません。", wx.ICON_ERROR)
+            self._show_message("指定されたパスが見つかりません。", QMessageBox.Icon.Critical)
             return
 
         self.current_path = path
@@ -227,64 +252,63 @@ class RenameMateFrame(wx.Frame):
         if ext.startswith("."):
             ext = ext[1:]
 
-        self.base_text.ChangeValue(base)
-        self.ext_text.ChangeValue(ext)
+        self.base_text.setPlainText(base)
+        self.ext_text.setPlainText(ext)
 
-    def on_prefix_date(self, event):
+    def on_prefix_date(self):
         # 先頭に日付を追加
         date_str = datetime.datetime.now().strftime("%y%m%d_")
-        self.base_text.ChangeValue(date_str + self.base_text.GetValue())
+        self.base_text.setPlainText(date_str + self.base_text.toPlainText())
 
-    def on_suffix_date(self, event):
+    def on_suffix_date(self):
         # 末尾に日付を追加
         date_str = datetime.datetime.now().strftime("%y%m%d")
-        self.base_text.ChangeValue(self.base_text.GetValue() + "_" + date_str)
+        self.base_text.setPlainText(self.base_text.toPlainText() + "_" + date_str)
 
-    def on_replace_spaces(self, event):
+    def on_replace_spaces(self):
         # 空白の置換（半角→_、全角→＿）
-        value = self.base_text.GetValue()
+        value = self.base_text.toPlainText()
         value = value.replace(" ", "_")
         value = value.replace(FULLWIDTH_SPACE, FULLWIDTH_UNDERSCORE)
-        self.base_text.ChangeValue(value)
+        self.base_text.setPlainText(value)
 
-    def on_clear(self, event):
+    def on_clear(self):
         # 入力欄と対象パスをリセット
         self.current_path = None
-        self.base_text.ChangeValue("")
-        self.ext_text.ChangeValue("")
-        self.base_text.SetFocus()
+        self.base_text.clear()
+        self.ext_text.clear()
+        self.base_text.setFocus()
 
-    def on_rename(self, event):
+    def on_rename(self):
         # 実際のリネーム処理
         self._rename_current()
 
-    def on_rename_clear_minimize(self, event):
+    def on_rename_clear_minimize(self):
         # 変更→クリア→最小化を一括で実行
         if not self.current_path:
-            self.Iconize(True)
+            self.showMinimized()
             return
 
         if not self._rename_current():
             return
-        self.on_clear(None)
-        self.Iconize(True)
+        self.on_clear()
+        self.showMinimized()
 
     def _rename_current(self):
         # 現在の入力内容でリネームを実行
         if not self.current_path:
-            self._show_message("オブジェクトをドラッグ＆ドロップしてください。", wx.ICON_INFORMATION)
+            self._show_message("オブジェクトをドラッグ＆ドロップしてください。", QMessageBox.Icon.Information)
             return False
 
-        base = self._sanitize_text(self.base_text.GetValue()).strip()
-        ext = self._sanitize_text(self.ext_text.GetValue()).strip()
+        base = self._sanitize_text(self.base_text.toPlainText()).strip()
+        ext = self._sanitize_text(self.ext_text.toPlainText()).strip()
 
         if not base:
-            self._show_message("ベース名が空です。", wx.ICON_ERROR)
+            self._show_message("ベース名が空です。", QMessageBox.Icon.Critical)
             return False
 
-        if ext:
-            if not ext.startswith("."):
-                ext = "." + ext
+        if ext and not ext.startswith("."):
+            ext = "." + ext
         new_name = base + ext
 
         src_dir = os.path.dirname(self.current_path)
@@ -294,70 +318,84 @@ class RenameMateFrame(wx.Frame):
             return True
 
         if os.path.exists(new_path):
-            self._show_message("同じ名前のオブジェクトが既に存在します。", wx.ICON_ERROR)
+            self._show_message("同じ名前のオブジェクトが既に存在します。", QMessageBox.Icon.Critical)
             return False
 
         try:
             os.rename(self.current_path, new_path)
         except OSError as exc:
-            self._show_message(f"変更に失敗しました: {exc}", wx.ICON_ERROR)
+            self._show_message(f"変更に失敗しました: {exc}", QMessageBox.Icon.Critical)
             return False
 
         self.current_path = new_path
         # 成功時はポップアップを出さずに状態のみ更新
         return True
 
-    def on_toggle_topmost(self, event):
+    def on_toggle_topmost(self, state):
         # 常に手前表示の切り替え
-        style = self.GetWindowStyle()
-        if event.IsChecked():
-            style |= wx.STAY_ON_TOP
+        on_top = state == Qt.CheckState.Checked.value
+        was_minimized = self.isMinimized()
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on_top)
+        self.show()
+        if was_minimized:
+            self.showMinimized()
         else:
-            style &= ~wx.STAY_ON_TOP
-        self.SetWindowStyleFlag(style)
-        self.Raise()
+            self.raise_()
+            self.activateWindow()
 
     def _show_message(self, message, icon):
         # 必要なときだけメッセージ表示
-        wx.MessageBox(message, "RenameMate", wx.OK | icon)
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle("RenameMate")
+        message_box.setText(message)
+        message_box.setIcon(icon)
+        message_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        message_box.exec()
 
     def position_near_cursor(self):
         # カーソル付近に表示し、画面外にはみ出さないよう補正
-        mouse_pos = wx.GetMousePosition()
-        display_index = wx.Display.GetFromPoint(mouse_pos)
-        if display_index == wx.NOT_FOUND:
-            display = wx.Display(0)
-        else:
-            display = wx.Display(display_index)
+        mouse_pos = QCursor.pos()
+        screen = QGuiApplication.screenAt(mouse_pos)
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
 
-        bounds = display.GetGeometry()
-        size = self.GetSize()
+        bounds = screen.availableGeometry()
+        width = self.frameGeometry().width()
+        height = self.frameGeometry().height()
 
         # 少しオフセットしてカーソルと被らないようにする
-        x = mouse_pos.x + 10
-        y = mouse_pos.y + 10
+        x = mouse_pos.x() + 10
+        y = mouse_pos.y() + 10
 
-        max_x = bounds.x + bounds.width - size.x
-        max_y = bounds.y + bounds.height - size.y
+        max_x = bounds.x() + bounds.width() - width
+        max_y = bounds.y() + bounds.height() - height
 
-        x = min(max(x, bounds.x), max_x)
-        y = min(max(y, bounds.y), max_y)
+        if max_x < bounds.x():
+            x = bounds.x()
+        else:
+            x = min(max(x, bounds.x()), max_x)
 
-        self.SetPosition(wx.Point(x, y))
+        if max_y < bounds.y():
+            y = bounds.y()
+        else:
+            y = min(max(y, bounds.y()), max_y)
+
+        self.move(x, y)
 
 
-class RenameMateApp(wx.App):
-    def OnInit(self):
-        # アプリ起動時にフレームを生成
-        frame = RenameMateFrame()
-        frame.position_near_cursor()
-        frame.Show()
-        frame.Refresh()
+class RenameMateApp(QApplication):
+    def __init__(self, argv):
+        super().__init__(argv)
+        self.frame = RenameMateWindow()
+        self.frame.position_near_cursor()
+        self.frame.show()
+
         # コマンドライン引数で渡されたパスを読み込む（右クリック連携用）
         start_path = self._get_start_path()
         if start_path:
-            frame.load_path(start_path)
-        return True
+            self.frame.load_path(start_path)
 
     def _get_start_path(self):
         # 右クリックの旧コンテキストメニューから渡される "%1" を想定
@@ -368,5 +406,5 @@ class RenameMateApp(wx.App):
 
 if __name__ == "__main__":
     # エントリーポイント
-    app = RenameMateApp()
-    app.MainLoop()
+    app = RenameMateApp(sys.argv)
+    sys.exit(app.exec())
