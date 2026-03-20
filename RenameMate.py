@@ -9,7 +9,7 @@ import os
 import sys
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QCursor, QFont, QGuiApplication
+from PySide6.QtGui import QCursor, QFont, QGuiApplication, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -58,32 +58,31 @@ class PathTextEdit(QPlainTextEdit):
             return
         super().keyPressEvent(event)
 
-    def dragEnterEvent(self, event):
-        # ローカルパスのDnDのみ受け付ける
-        if self._extract_path(event.mimeData()):
-            event.acceptProposedAction()
-            return
-        event.ignore()
+    def canInsertFromMimeData(self, source):
+        # ローカルファイルのDnDのみ独自処理し、それ以外は既定の貼り付け/ドロップへ委譲
+        if self._extract_local_file_path(source):
+            return True
+        return super().canInsertFromMimeData(source)
 
-    def dropEvent(self, event):
-        # ドロップされた先頭1件のみを扱う
-        path = self._extract_path(event.mimeData())
+    def insertFromMimeData(self, source):
+        # QPlainTextEditの標準DnD状態管理を維持したまま、ファイルドロップだけ読込に置き換える
+        path = self._extract_local_file_path(source)
         if not path:
-            event.ignore()
+            super().insertFromMimeData(source)
             return
+
         self._on_drop_callback(path)
-        event.acceptProposedAction()
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.setTextCursor(cursor)
 
     @staticmethod
-    def _extract_path(mime_data):
+    def _extract_local_file_path(mime_data):
         if mime_data.hasUrls():
             for url in mime_data.urls():
                 if url.isLocalFile():
                     return url.toLocalFile()
-        if mime_data.hasText():
-            text = mime_data.text().strip().strip('"')
-            if text:
-                return text.splitlines()[0]
         return None
 
 
@@ -91,7 +90,7 @@ class RenameMateWindow(QWidget):
     # メインウィンドウ
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("RenameMate")
+        self.setWindowTitle("RenameMate v1.5.1")
         self.setFixedSize(*WINDOW_SIZE)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
 
